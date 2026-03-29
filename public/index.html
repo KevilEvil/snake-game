@@ -1,149 +1,236 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
 <meta charset="UTF-8">
-<title>Snake Rush</title>
+<title>SnakeRush</title>
 <style>
-body { margin:0; overflow:hidden; background:#0f172a; }
-canvas { display:block; }
-
-#ui {
-    position:absolute;
-    top:20px;
-    left:20px;
-    color:white;
-    font-family:sans-serif;
-}
-
-#nameInput {
-    position:absolute;
-    top:50%;
-    left:50%;
-    transform:translate(-50%,-50%);
-}
-
-button {
-    padding:10px;
-}
+body {margin:0; overflow:hidden; background:#111; color:white; font-family:sans-serif;}
+#ui {position:absolute; top:10px; left:10px;}
+#share {position:absolute; bottom:10px; left:10px;}
+button {padding:8px; margin-top:5px; cursor:pointer;}
+canvas {display:block;}
+#minimap {position:absolute; right:10px; bottom:10px; border:2px solid #555; background:#111;}
 </style>
 </head>
 <body>
 
-<div id="nameInput">
-    <input id="name" placeholder="Enter your nickname">
-    <button onclick="start()">Play</button>
+<!-- Intro Video -->
+<div id="introScreen" style="position:absolute;top:0;left:0;width:100%;height:100%;display:flex;align-items:center;justify-content:center;flex-direction:column;background:#000;">
+    <video id="introVideo" autoplay muted playsinline style="width:100%;height:100%;object-fit:cover;">
+        <source src="intro.mp4" type="video/mp4">
+        Your browser does not support the video tag.
+    </video>
+    <button id="skipIntro" style="position:absolute;bottom:50px;padding:15px 30px;font-size:20px;cursor:pointer;">Skip</button>
 </div>
 
-<canvas id="game"></canvas>
+<!-- Login Screen -->
+<div id="loginScreen" style="position:absolute;top:0;left:0;width:100%;height:100%;background:#111;display:none;align-items:center;justify-content:center;flex-direction:column;">
+    <h1 style="color:white;">Enter your nickname</h1>
+    <input id="playerName" type="text" placeholder="Your nickname..." style="padding:10px;font-size:16px;margin-bottom:10px;">
+    <button onclick="startGame()" style="padding:10px 20px;font-size:16px;">Play</button>
+</div>
 
-<div id="ui"></div>
+<div id="ui" style="display:none;"></div>
+<div id="share" style="display:none;">
+<button onclick="shareScore()">📤 Share Your Score</button>
+</div>
+
+<!-- Boost Button -->
+<div id="boostBtn" style="position:absolute;bottom:60px;left:10px;">
+  <button style="font-size:24px;padding:20px 30px;" onclick="boostOn()" onmouseup="boostOff()" ontouchstart="boostOn()" ontouchend="boostOff()">💨 Boost</button>
+</div>
+
+<canvas id="game" style="display:none;"></canvas>
+<canvas id="minimap" width="200" height="200" style="display:none;"></canvas>
 
 <script src="/socket.io/socket.io.js"></script>
 <script>
-const socket = io();
+const canvas=document.getElementById('game');
+const ctx=canvas.getContext('2d');
+canvas.width=window.innerWidth;
+canvas.height=window.innerHeight;
 
-let canvas = document.getElementById('game');
-let ctx = canvas.getContext('2d');
+window.addEventListener('resize', () => {
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
+});
 
-canvas.width = window.innerWidth;
-canvas.height = window.innerHeight;
+const mini = document.getElementById('minimap');
+const mctx = mini.getContext('2d');
 
-let playerId;
-let players = {};
-let foods = [];
+const socket=io();
+let mouse={x:canvas.width/2,y:canvas.height/2};
+let boosting=false;
+let players=[],foods=[],me=null;
+const WORLD_SIZE = 4000;
+let playerName="";
 
-let camX = 0;
-let camY = 0;
+window.onmousemove=e=>{mouse.x=e.clientX; mouse.y=e.clientY;}
+window.onmousedown=()=>boostOn();
+window.onmouseup=()=>boostOff();
 
-let angle = 0;
-let boost = false;
+// Touch controls for mobile
+window.ontouchmove = e => {
+    if(e.touches.length > 0){
+        mouse.x = e.touches[0].clientX;
+        mouse.y = e.touches[0].clientY;
+    }
+};
+window.ontouchstart = e => { boostOn(); }
+window.ontouchend = e => { boostOff(); }
 
-// 🎮 بدء اللعبة
-function start(){
-    let name = document.getElementById('name').value;
-    socket.emit('setName', name);
-    document.getElementById('nameInput').style.display = "none";
+// Intro video
+const introScreen = document.getElementById('introScreen');
+const loginScreen = document.getElementById('loginScreen');
+const introVideo = document.getElementById('introVideo');
+const skipBtn = document.getElementById('skipIntro');
+
+function showLogin(){
+    introScreen.style.display = "none";
+    loginScreen.style.display = "flex";
 }
 
-// 🧠 استقبال البيانات
-socket.on('state', data => {
-    players = data.players;
-    foods = data.foods;
+introVideo.onended = showLogin;
+skipBtn.onclick = showLogin;
 
-    if(!playerId) playerId = socket.id;
+function startGame(){
+    const input = document.getElementById('playerName');
+    if(input.value.trim()==="") return alert("Write your nickname!");
+    playerName = input.value.trim();
+
+    loginScreen.style.display="none";
+    document.getElementById('ui').style.display="block";
+    document.getElementById('share').style.display="block";
+    canvas.style.display="block";
+    mini.style.display="block";
+
+    socket.emit('setName', playerName);
+}
+
+function boostOn(){ boosting=true; socket.emit('boost', true);}
+function boostOff(){ boosting=false; socket.emit('boost', false);}
+
+socket.on('state', data=>{
+    players=data.players;
+    foods=data.foods;
+    me=players[socket.id];
+    if(!me) return;
+    let html="🏆 Leaderboard<br>";
+    data.leaderboard.forEach((p,i)=>{
+        html+=`${i+1}. ${p.name || "Player"} (${Math.floor(p.size)})<br>`;
+    });
+    html+=`<br>🔥 Size: ${Math.floor(me.size)}<br>💀 Kills: ${me.kills}`;
+    document.getElementById('ui').innerHTML=html;
 });
 
-// 🕹️ تحكم
-window.addEventListener('mousemove', e=>{
-    let dx = e.clientX - canvas.width/2;
-    let dy = e.clientY - canvas.height/2;
-    angle = Math.atan2(dy, dx);
-});
-
-window.addEventListener('mousedown', ()=> boost = true);
-window.addEventListener('mouseup', ()=> boost = false);
-
-// 📱 موبايل
-window.addEventListener('touchmove', e=>{
-    let touch = e.touches[0];
-    let dx = touch.clientX - canvas.width/2;
-    let dy = touch.clientY - canvas.height/2;
-    angle = Math.atan2(dy, dx);
-});
-window.addEventListener('touchstart', ()=> boost = true);
-window.addEventListener('touchend', ()=> boost = false);
-
-// 🚀 إرسال الحركة (سريع)
-setInterval(()=>{
-    socket.emit('move', { angle, boost });
-}, 50);
-
-// 🎨 رسم
-function draw(){
-
-    ctx.fillStyle = "#0f172a";
-    ctx.fillRect(0,0,canvas.width,canvas.height);
-
-    let me = players[playerId];
-    if(me){
-        camX = me.x - canvas.width/2;
-        camY = me.y - canvas.height/2;
+function shareScore(){
+    if(!me) return;
+    if(navigator.share){
+        navigator.share({title:"Snake.io Viral",text:`I reached size ${Math.floor(me.size)} and killed ${me.kills} players! 😱🔥`,url:location.href});
     }
+}
 
-    // 🔴 حدود حمراء
+function update(){
+    if(!me) return;
+    let dx=mouse.x-canvas.width/2,dy=mouse.y-canvas.height/2;
+    let angle=Math.atan2(dy,dx);
+    socket.emit('update',{angle:angle,speed:me.speed});
+}
+
+function drawGrid(camX,camY){
+    ctx.strokeStyle="#222"; ctx.lineWidth=1;
+    for(let x=-camX%40;x<canvas.width;x+=40){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,canvas.height);ctx.stroke();}
+    for(let y=-camY%40;y<canvas.height;y+=40){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(canvas.width,y);ctx.stroke();}
+}
+
+function drawBorders(camX, camY){
     ctx.strokeStyle = "red";
-    ctx.lineWidth = 5;
-    ctx.strokeRect(-camX, -camY, 3000, 3000);
+    ctx.lineWidth = 20;
+    ctx.strokeRect(-camX, -camY, WORLD_SIZE, WORLD_SIZE);
+}
 
-    // 🍎 الأكل
-    ctx.fillStyle = "yellow";
+function draw(){
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    if(!me) return;
+    let camX = me.x - canvas.width/2;
+    let camY = me.y - canvas.height/2;
+
+    drawGrid(camX,camY);
+    drawBorders(camX,camY);
+
     foods.forEach(f=>{
         ctx.beginPath();
-        ctx.arc(f.x - camX, f.y - camY, 3, 0, Math.PI*2);
+        ctx.fillStyle = f.size > 10 ? "yellow" : "orange";
+        ctx.arc(f.x-camX,f.y-camY,f.size,0,Math.PI*2);
         ctx.fill();
     });
 
-    // 🐍 اللاعبين
-    for(let id in players){
-        let p = players[id];
-
-        ctx.fillStyle = (id === playerId) ? "#22c55e" : "#38bdf8";
-
-        p.body.forEach(part=>{
+    Object.values(players).forEach(p=>{
+        for(let i=0;i<p.body.length;i++){
+            let b=p.body[i];
+            let radius=8;
+            let shade=Math.floor(100 + i*1.5);
+            ctx.fillStyle=`rgb(${shade},${shade},0)`;
             ctx.beginPath();
-            ctx.arc(part.x - camX, part.y - camY, 5, 0, Math.PI*2);
+            ctx.arc(b.x-camX,b.y-camY,radius,0,Math.PI*2);
             ctx.fill();
-        });
+        }
 
-        ctx.fillStyle = "white";
-        ctx.fillText(p.name, p.x - camX - 10, p.y - camY - 10);
-    }
+        let head=p.body[0];
+        if(head){
+            if(boosting){
+                ctx.save();
+                ctx.shadowColor = "lime";
+                ctx.shadowBlur = 20;
+                ctx.beginPath();
+                ctx.arc(head.x-camX,head.y-camY,14,0,Math.PI*2);
+                ctx.fillStyle="lime";
+                ctx.fill();
+                ctx.restore();
+            }
+            ctx.fillStyle=p.skin;
+            ctx.beginPath();
+            ctx.arc(head.x-camX,head.y-camY,10,0,Math.PI*2);
+            ctx.fill();
 
-    requestAnimationFrame(draw);
+            ctx.fillStyle="white";
+            ctx.beginPath();
+            ctx.arc(head.x-camX-4,head.y-camY-4,3,0,Math.PI*2);
+            ctx.arc(head.x-camX+4,head.y-camY-4,3,0,Math.PI*2);
+            ctx.fill();
+
+            ctx.fillStyle="black";
+            ctx.beginPath();
+            ctx.arc(head.x-camX-4,head.y-camY-4,1.5,0,Math.PI*2);
+            ctx.arc(head.x-camX+4,head.y-camY-4,1.5,0,Math.PI*2);
+            ctx.fill();
+        }
+    });
 }
 
-draw();
-</script>
+function drawMiniMap(){
+    if(!me) return;
+    mctx.clearRect(0,0,mini.width,mini.height);
+    const scale = mini.width/WORLD_SIZE;
 
+    foods.forEach(f=>{
+        mctx.fillStyle = f.size>10?"yellow":"orange";
+        mctx.fillRect(f.x*scale,f.y*scale,4,4);
+    });
+
+    Object.values(players).forEach(p=>{
+        if(p.id===me.id){
+            mctx.fillStyle="lime";
+            mctx.fillRect(p.x*scale-5,p.y*scale-5,10,10);
+        } else {
+            mctx.fillStyle="red";
+            mctx.fillRect(p.x*scale-2,p.y*scale-2,4,4);
+        }
+    });
+}
+
+function loop(){update(); draw(); drawMiniMap(); requestAnimationFrame(loop);}
+loop();
+</script>
 </body>
 </html>
